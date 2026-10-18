@@ -13,28 +13,17 @@ import AppKit
 struct DNS_Easy_SwitcherApp: App {
     @StateObject private var menuBarController = MenuBarController()
     
-    let modelContainer: ModelContainer
+    let modelContainer: ModelContainer?
+    let storageError: Error?
+    @State private var hasPresentedStorageError = false
     
     init() {
         do {
-            let schema = Schema([
-                DNSSettings.self,
-                CustomDNSServer.self
-            ])
-            let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
-            self.modelContainer = try ModelContainer(for: schema, configurations: [modelConfiguration])
+            self.modelContainer = try DNSPersistence.makeContainer()
+            self.storageError = nil
         } catch {
-            // If the persistent store cannot be created (e.g., corrupted store or permission issue),
-            // fall back to an in-memory container so the app can still launch.
-            let schema = Schema([
-                DNSSettings.self,
-                CustomDNSServer.self
-            ])
-            self.modelContainer = try! ModelContainer(
-                for: schema,
-                configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
-            )
-            print("Warning: Using in-memory store due to ModelContainer error: \(error)")
+            self.modelContainer = nil
+            self.storageError = error
         }
     }
 
@@ -43,15 +32,42 @@ struct DNS_Easy_SwitcherApp: App {
             Color.clear
                 .frame(width: 0, height: 0)
                 .hidden()
+                .onAppear {
+                    if storageError != nil && !hasPresentedStorageError {
+                        hasPresentedStorageError = true
+                        showStorageError()
+                    }
+                }
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 0, height: 0)
-        .modelContainer(modelContainer)
         
-        MenuBarExtra("DNS Switcher", systemImage: "network") {
-            MenuBarView()
-                .environment(\.modelContext, modelContainer.mainContext)
-                .frame(width: 300)
+        MenuBarExtra("DNS Switcher", systemImage: modelContainer == nil ? "exclamationmark.triangle" : "network") {
+            if let modelContainer {
+                MenuBarView()
+                    .modelContainer(modelContainer)
+                    .frame(width: 300)
+            } else {
+                Text("Saved DNS profiles could not be loaded.")
+                Button("Show Storage Error…", action: showStorageError)
+                Divider()
+                Button("Quit") {
+                    NSApplication.shared.terminate(nil)
+                }
+            }
+        }
+    }
+
+    private func showStorageError() {
+        guard let storageError else { return }
+        DispatchQueue.main.async {
+            let alert = NSAlert()
+            alert.alertStyle = .critical
+            alert.messageText = "Could Not Load Saved DNS Profiles"
+            alert.informativeText = "\(storageError.localizedDescription)\n\nPlease resolve the storage error and relaunch DNS Easy Switcher. Profile editing is unavailable until your saved data can be loaded."
+            alert.addButton(withTitle: "OK")
+            NSApplication.shared.activate(ignoringOtherApps: true)
+            alert.runModal()
         }
     }
 }

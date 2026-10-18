@@ -238,6 +238,11 @@ struct MenuBarView: View {
                 
                 Divider()
 
+                LaunchAtLoginView()
+                    .padding(.horizontal)
+
+                Divider()
+
                 Button("About") {
                     showAboutSheet()
                 }
@@ -316,7 +321,7 @@ struct MenuBarView: View {
         let addView = AddCustomDNSView { newServer in
             if let newServer = newServer {
                 modelContext.insert(newServer)
-                try? modelContext.save()
+                guard saveChanges(errorMessage: "Could Not Add Custom DNS") else { return }
                 // Automatically activate the new DNS
                 activateDNS(type: .custom(newServer))
             }
@@ -346,11 +351,12 @@ struct MenuBarView: View {
             case .edit:
                 editCustomDNS(server)
             case .delete:
+                let wasActive = dnsSettings.first?.activeCustomDNSID == server.id
                 modelContext.delete(server)
-                try? modelContext.save()
+                guard saveChanges(errorMessage: "Could Not Delete Custom DNS") else { return }
                 
                 // If this was the active server, disable DNS
-                if dnsSettings.first?.activeCustomDNSID == server.id {
+                if wasActive {
                     isUpdating = true
                     DNSManager.shared.disableDNS { success in
                         if success {
@@ -413,7 +419,7 @@ struct MenuBarView: View {
                 server.secondaryDNS = updatedServer.secondaryDNS
                 server.tertiaryDNS = updatedServer.tertiaryDNS
                 server.quaternaryDNS = updatedServer.quaternaryDNS
-                try? modelContext.save()
+                guard saveChanges(errorMessage: "Could Not Save Custom DNS") else { return }
                 
                 // If this was the active server, update DNS settings
                 if dnsSettings.first?.activeCustomDNSID == server.id {
@@ -529,7 +535,8 @@ struct MenuBarView: View {
     }
     
     private func updateSettings(type: DNSType) {
-        if let settings = dnsSettings.first {
+        do {
+            let settings = try settingsForUpdate()
             settings.isCloudflareEnabled = (type == .cloudflare)
             settings.isQuad9Enabled = (type == .quad9)
             settings.isAdGuardEnabled = type == .adguard ? true : nil
@@ -547,13 +554,71 @@ struct MenuBarView: View {
             }
             
             settings.timestamp = Date()
+            _ = saveChanges(
+                errorMessage: "Could Not Save DNS Selection",
+                explanation: "macOS applied the DNS change, but the app could not save its selection."
+            )
+        } catch {
+            modelContext.rollback()
+            showPersistenceError(
+                error,
+                message: "Could Not Save DNS Selection",
+                explanation: "macOS applied the DNS change, but the app could not save its selection."
+            )
         }
     }
     
     private func ensureSettingsExist() {
-        if dnsSettings.isEmpty {
-            modelContext.insert(DNSSettings())
-            try? modelContext.save()
+        do {
+            _ = try settingsForUpdate()
+            if modelContext.hasChanges {
+                _ = saveChanges(errorMessage: "Could Not Save DNS Settings")
+            }
+        } catch {
+            modelContext.rollback()
+            showPersistenceError(error, message: "Could Not Read DNS Settings")
+        }
+    }
+
+    private func settingsForUpdate() throws -> DNSSettings {
+        // Fetch directly because @Query may not yet reflect a just-created settings record.
+        var descriptor = FetchDescriptor<DNSSettings>(sortBy: [SortDescriptor(\.timestamp)])
+        descriptor.fetchLimit = 1
+        if let settings = try modelContext.fetch(descriptor).first {
+            return settings
+        }
+
+        let settings = DNSSettings()
+        modelContext.insert(settings)
+        return settings
+    }
+
+    private func saveChanges(errorMessage: String, explanation: String = "Your changes could not be saved.") -> Bool {
+        do {
+            try modelContext.save()
+            return true
+        } catch {
+            // Restore the persisted values so the UI never presents a failed write as saved.
+            modelContext.rollback()
+            showPersistenceError(error, message: errorMessage, explanation: explanation)
+            return false
+        }
+    }
+
+    private func showPersistenceError(
+        _ error: Error,
+        message: String,
+        explanation: String = "Your changes could not be saved."
+    ) {
+        // Present after menu tracking finishes so the alert can take focus.
+        DispatchQueue.main.async {
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = message
+            alert.informativeText = "\(explanation)\n\n\(error.localizedDescription)"
+            alert.addButton(withTitle: "OK")
+            NSApplication.shared.activate(ignoringOtherApps: true)
+            alert.runModal()
         }
     }
     

@@ -24,7 +24,7 @@ struct AboutView: View {
             Text(versionText)
                 .foregroundColor(.secondary)
             
-            Link("GitHub — glinford/dns-easy-switcher", destination: URL(string: "https://github.com/glinford/dns-easy-switcher")!)
+            Link("GitHub — arthur-c/dns-easy-switcher", destination: URL(string: "https://github.com/arthur-c/dns-easy-switcher")!)
             
             HStack {
                 Spacer()
